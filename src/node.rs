@@ -17,16 +17,15 @@ use crate::{
 
 #[derive(Eq)]
 pub struct Node {
-    file_info: Rc<FileInfo>,
+    file_info: Rc<RefCell<FileInfo>>,
     prev: Option<Rc<RefCell<Node>>>,
     children: Vec<Rc<RefCell<Node>>>,
-    node_path: Vec<Rc<FileInfo>>,
-    processed: bool,
+    node_path: Vec<Rc<RefCell<FileInfo>>>,
 }
 
 impl Node {
     pub fn create(
-        file_info: &Rc<FileInfo>,
+        file_info: &Rc<RefCell<FileInfo>>,
         prev: Option<Rc<RefCell<Node>>>,
     ) -> Rc<RefCell<Self>> {
         let mut node_path = vec![];
@@ -39,7 +38,6 @@ impl Node {
         let node = Rc::new(RefCell::new(Self {
             file_info: file_info.clone(),
             prev: prev.clone(),
-            processed: false,
             children: vec![],
             node_path,
         }));
@@ -54,7 +52,7 @@ impl Node {
         let mut current = starting_node.clone();
 
         loop {
-            let current_processed = (*current).borrow().processed;
+            let current_processed = (*(*current).borrow().file_info).borrow().processed;
 
             // If the current node is already processed
             if current_processed {
@@ -76,13 +74,13 @@ impl Node {
                 // If the doesn't have children yet
                 // Check if the file o the node actually has any includes
                 let current_file_info = (*current).borrow().file_info.clone();
-                if current_file_info.includes.len() > 0 {
+                if (*current_file_info).borrow().includes.len() > 0 {
                     // If there are any includes, create node children
                     Self::create_node_children(current.clone(), project);
                 } else {
                     // If there was non in the first place, we can count this node as a processed
                     // one and skip loop iteration
-                    (*current).borrow_mut().processed = true;
+                    (*(*current).borrow_mut().file_info).borrow_mut().processed = true;
                     continue;
                 }
             }
@@ -91,7 +89,7 @@ impl Node {
             current_children = (*current).borrow().children.clone();
             if let Some(unprocessed_child) = current_children.iter()
                 .find(|&child| {
-                    !(*child.clone()).borrow().processed
+                    !(*(*child.clone()).borrow().file_info).borrow().processed
                 }) {
                 // If we find one, we check if it's not a recursive one
                 let (is_unprocessed_child_recursive, file_name) = (*unprocessed_child.clone())
@@ -99,7 +97,8 @@ impl Node {
                 if is_unprocessed_child_recursive {
                     // If it is recursive, it can be considered processed right away and we print
                     // out its path
-                    (*unprocessed_child.clone()).borrow_mut().processed = true;
+                    (*(*unprocessed_child.clone()).borrow_mut().file_info)
+                        .borrow_mut().processed = true;
 
                     let readable_path = (*unprocessed_child.clone()).borrow()
                         .readable_path();
@@ -126,7 +125,7 @@ impl Node {
                 }
             } else {
                 // If there's none left, we can call this node processed and skip the loop iteration
-                (*current).borrow_mut().processed = true;
+                (*(*current).borrow_mut().file_info).borrow_mut().processed = true;
             }
         }
 
@@ -136,11 +135,11 @@ impl Node {
     fn create_node_children(node: Rc<RefCell<Node>>, project: &mut Project) {
         let file_info = node.borrow().file_info.clone();
 
-        let node_children = file_info.includes.iter()
+        let node_children = (*file_info).borrow().includes.iter()
             .filter_map(|include| {
                 if let Some(include_file_info) = project.get_file(
                     include.clone(),
-                    file_info.module.clone(),
+                    (*file_info).borrow().module.clone(),
                 ) {
                     Some(Node::create(&include_file_info, Some(node.clone())))
                 } else {
@@ -152,8 +151,11 @@ impl Node {
     }
 
     fn is_recursive(&self) -> (bool, Option<String>) {
-        if !self.node_path.iter().all_unique() {
-            (true, Some(self.node_path.last().unwrap().file_name.clone()))
+        let mut abs_paths = self.node_path.iter()
+            .map(|file_info| (*file_info).borrow().abs_path.clone());
+
+        if !abs_paths.all_unique() {
+            (true, Some((*self.node_path.last().unwrap()).borrow().file_name.clone()))
         } else {
             (false, None)
         }
@@ -161,7 +163,7 @@ impl Node {
 
     fn readable_path(&self) -> Vec<String> {
         self.node_path.iter().map(|node| {
-            node.file_name.clone()
+            (*node).borrow().file_name.clone()
         }).collect()
     }
 }
@@ -176,17 +178,16 @@ impl PartialEq for Node {
 impl Debug for Node {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Node (")?;
-        writeln!(f, "\tFile Info: {}", (*self.file_info).abs_path)?;
+        writeln!(f, "\tFile Info: {}", (*self.file_info).borrow().abs_path)?;
         writeln!(f, "\tPrevious Node: {}", match self.prev.clone() {
             Some(previous_node) => (*(*previous_node).borrow().file_info)
-                .file_name.clone(),
+                .borrow().file_name.clone(),
             None => "None".to_owned()
         })?;
         writeln!(f, "\tChildren: {:?}", self.children.iter().map(|child| {
-            (**child).borrow().file_info.file_name.clone()
+            (*(**child).borrow().file_info).borrow().file_name.clone()
         }).collect::<Vec<String>>())?;
         writeln!(f, "\tNode Path: {:?}", self.node_path)?;
-        writeln!(f, "\tProcessed: {}", self.processed)?;
         writeln!(f, ")")
     }
 }

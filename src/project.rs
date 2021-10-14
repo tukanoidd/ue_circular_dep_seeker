@@ -6,17 +6,18 @@ use std::{
     iter::FromIterator,
     io::{
         BufRead,
-        BufReader
+        BufReader,
     },
-    fmt:: {
+    fmt::{
         Debug,
-        Formatter
+        Formatter,
     },
     collections::{
         HashMap,
-        HashSet
+        HashSet,
     },
 };
+use std::cell::RefCell;
 
 use substring::Substring;
 
@@ -25,7 +26,7 @@ use crate::file_info::FileInfo;
 pub struct Project {
     pub root_path: String,
     pub modules: Vec<(String, Vec<String>)>,
-    pub files: Vec<Rc<FileInfo>>,
+    pub files: Vec<Rc<RefCell<FileInfo>>>,
     pub circular_dependency_paths: HashSet<Vec<String>>,
 }
 
@@ -119,19 +120,20 @@ impl Project {
             root_path: project_path.clone(),
             modules: res_modules,
             files: vec![],
-            circular_dependency_paths: HashSet::new()
+            circular_dependency_paths: HashSet::new(),
         }
     }
 
-    pub fn create_file_info(&mut self, abs_path: String) -> Rc<FileInfo> {
-        let file_info = Rc::new(FileInfo::create(abs_path, &self.modules));
+    pub fn create_file_info(&mut self, abs_path: String) -> Rc<RefCell<FileInfo>> {
+        let file_info = FileInfo::create(abs_path, &self.modules);
 
         self.files.push(file_info.clone());
 
         file_info
     }
 
-    pub fn get_file(&mut self, partial_path: String, entry_module: String) -> Option<Rc::<FileInfo>> {
+    pub fn get_file(&mut self, partial_path: String, entry_module: String)
+                    -> Option<Rc<RefCell<FileInfo>>> {
         // Check if root module actually exists
         let mut root_module = None;
 
@@ -182,7 +184,7 @@ impl Project {
         &mut self,
         modl: (String, Vec<String>),
         partial_path: String,
-    ) -> Option<Rc<FileInfo>> {
+    ) -> Option<Rc<RefCell<FileInfo>>> {
         // Check if any of the paths inside of the module are viable for the file we're looking
         // for
         for include_path in modl.1.iter() {
@@ -195,7 +197,7 @@ impl Project {
             if Path::new(path_to_file.clone().as_str()).exists() {
                 // Return cached file info if it exists
                 return if let Some(file) = self.files.iter()
-                    .find(|f| f.abs_path == path_to_file) {
+                    .find(|f| (*f).borrow().abs_path == path_to_file) {
                     Some(file.clone())
                 } else {
                     // If it doesnt, create new file info, cache it and return it

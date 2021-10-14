@@ -1,6 +1,8 @@
 use std::{
+    rc::Rc,
     fs::File,
     path::Path,
+    cell::RefCell,
     fmt::{
         Debug,
         Display,
@@ -36,10 +38,11 @@ pub struct FileInfo {
     pub module: String,
     pub file_type: FileType,
     pub includes: Vec<String>,
+    pub processed: bool,
 }
 
 impl FileInfo {
-    pub fn create(abs_path: String, modules: &Vec<(String, Vec<String>)>) -> Self {
+    pub fn create(abs_path: String, modules: &Vec<(String, Vec<String>)>) -> Rc<RefCell<FileInfo>> {
         let file = File::open(Path::new(abs_path.as_str()))
             .expect(format!("Couldn't open a file at: {}", abs_path).as_str());
 
@@ -58,11 +61,13 @@ impl FileInfo {
         let mut includes = vec![];
 
         for line in file_lines {
-            if let Ok(l) = line {
+            if let Ok(mut l) = line {
                 if l.contains("#include") {
                     if l.contains(".generated.") || l.contains(".gen.") {
                         continue;
                     }
+
+                    l = l.trim().to_owned();
 
                     let l_split = l.split(" ");
 
@@ -80,13 +85,14 @@ impl FileInfo {
             .expect(format!("Couldn't find the module of the file: {}", abs_path).as_str())
             .0.clone();
 
-        Self {
+        Rc::new(RefCell::new(Self {
             abs_path: abs_path.clone(),
             file_name: file_name.to_owned(),
             module: module.clone(),
             file_type,
             includes,
-        }
+            processed: false
+        }))
     }
 }
 
@@ -98,6 +104,7 @@ impl Debug for FileInfo {
         writeln!(f, "\tModule: {}", self.module)?;
         writeln!(f, "\tFile Type: {}", self.file_type)?;
         writeln!(f, "\tIncludes: {:?}", self.includes)?;
+        writeln!(f, "\tProcessed: {}", self.processed)?;
         writeln!(f, ")")
     }
 }

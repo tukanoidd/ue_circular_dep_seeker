@@ -66,7 +66,7 @@ fn main() {
         .expect("Couldn't create the output file!");
 
     for (file_name, paths) in recursive_paths.iter() {
-        file.write("------------------------------------------------".as_bytes())
+        file.write("------------------------------------------------\n".as_bytes())
             .expect("Couldn't write to the output file");
 
         file.write((format!("{}:\n", file_name)).as_bytes())
@@ -79,7 +79,7 @@ fn main() {
             .collect();
 
         for path in output_paths {
-            file.write(format!("\t{}", path.join("->")).as_bytes())
+            file.write(format!("\t{}\n", path.join("->")).as_bytes())
                 .expect("Couldn't write to the output file");
         }
 
