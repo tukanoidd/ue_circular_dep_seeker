@@ -8,3 +8,5 @@ edition = "2018"
 [dependencies]
 substring = "1.4.5"
 itertools = "0.10.1"
+
+enum-map = "2.0.0"
