@@ -2,20 +2,27 @@ pub mod file_info;
 pub mod node;
 pub mod project;
 
-use std::fmt::{Display, Formatter};
-use std::{env, fs::File, io::Write, path::Path, rc::Rc};
+use std::{
+    env,
+    fmt::{Display, Formatter},
+    fs::File,
+    io::Write,
+    path::Path,
+    rc::Rc,
+};
 
-use enum_map::{enum_map, Enum, EnumMap};
 use itertools::Itertools;
+use paste::paste;
+
+use tstd::tenum::{tenum, TEnum, TEnumMap};
 
 use crate::{node::Node, project::Project};
 
-#[derive(Enum, Clone, Copy)]
-enum ParamType {
-    Project,
-    EntryPoint,
-    Output,
-}
+tenum!(ParamType {
+    Project: |&'static| str = "p",
+    EntryPoint: |&'static| str = "e",
+    Output: |&'static| str = "o"
+});
 
 impl From<&str> for ParamType {
     fn from(val: &str) -> Self {
@@ -44,11 +51,13 @@ impl Display for ParamType {
 
 const PARAM_SYMBOL: &'static str = "~";
 
-fn param_exists_err(param_types: &[ParamType], map: &EnumMap<ParamType, &str>) -> Option<String> {
+fn param_exists_err(param_types: &[ParamType], map: &TEnumMap<ParamType, &str>) -> Option<String> {
     let mut res = String::new();
 
     for &param_type in param_types {
-        if map[param_type].is_empty() {
+        let param = map.get(param_type);
+
+        if param.unwrap_or(&"").is_empty() {
             res.push_str(&format!(
                 "{}{}",
                 if res.is_empty() { "" } else { " & " },
@@ -70,15 +79,11 @@ fn param_exists_err(param_types: &[ParamType], map: &EnumMap<ParamType, &str>) -
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    let mut params = enum_map! {
-        ParamType::Project => "",
-        ParamType::EntryPoint => "",
-        ParamType::Output => "",
-    };
+    let mut params = TEnumMap::empty();
 
     for arg in args.iter() {
         if arg.contains(PARAM_SYMBOL) {
-            params[ParamType::from(&arg[1..2])] = (&arg[3..]).clone();
+            params.insert(ParamType::from(&arg[1..2]), &arg[3..]);
         }
     }
 
@@ -95,22 +100,22 @@ fn main() {
         )
     }
 
-    let mut project = Project::create(params[ParamType::Project].to_owned());
+    let mut project = Project::create(params.get(ParamType::Project).unwrap().to_owned());
     let entry_point_file_info =
-        Rc::new(project.create_file_info(params[ParamType::EntryPoint].to_owned()));
+        Rc::new(project.create_file_info(params.get(ParamType::EntryPoint).unwrap().to_owned()));
 
     let root_node = Node::create(&entry_point_file_info, None);
 
     let recursive_paths = Node::traverse(&root_node, &mut project);
 
-    let mut file = File::create(Path::new(params[ParamType::Output]))
+    let mut file = File::create(Path::new(params.get(ParamType::Output).unwrap()))
         .expect("Couldn't create the output file!");
 
     for (file_name, paths) in recursive_paths.iter() {
-        file.write("------------------------------------------------\n".as_bytes())
+        file.write_all(b"------------------------------------------------\n")
             .expect("Couldn't write to the output file");
 
-        file.write((format!("{}:\n", file_name)).as_bytes())
+        file.write_all((format!("{}:\n", file_name)).as_bytes())
             .expect("Couldn't write to the output file");
 
         let output_paths: Vec<&Vec<String>> = paths
@@ -119,11 +124,11 @@ fn main() {
             .collect();
 
         for path in output_paths {
-            file.write(format!("\t{}\n", path.join("->")).as_bytes())
+            file.write_all(format!("\t{}\n", path.join("->")).as_bytes())
                 .expect("Couldn't write to the output file");
         }
 
-        file.write("------------------------------------------------\n".as_bytes())
+        file.write_all("------------------------------------------------\n".as_bytes())
             .expect("Couldn't write to the output file");
     }
 }

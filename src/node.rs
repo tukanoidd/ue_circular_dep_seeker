@@ -1,19 +1,13 @@
-use std::{
-    rc::Rc,
-    cell::RefCell,
-    fmt::{
-        Debug,
-        Formatter,
-    },
-};
 use std::collections::{HashMap, HashSet};
+use std::{
+    cell::RefCell,
+    fmt::{Debug, Formatter},
+    rc::Rc,
+};
 
 use itertools::Itertools;
 
-use crate::{
-    project::Project,
-    file_info::FileInfo,
-};
+use crate::{file_info::FileInfo, project::Project};
 
 #[derive(Eq)]
 pub struct Node {
@@ -45,8 +39,10 @@ impl Node {
         node.clone()
     }
 
-    pub fn traverse(starting_node: &Rc<RefCell<Node>>, project: &mut Project)
-                    -> HashMap<String, HashSet<Vec<String>>> {
+    pub fn traverse(
+        starting_node: &Rc<RefCell<Node>>,
+        project: &mut Project,
+    ) -> HashMap<String, HashSet<Vec<String>>> {
         let mut recursive_paths: HashMap<String, HashSet<Vec<String>>> = HashMap::new();
 
         let mut current = starting_node.clone();
@@ -87,26 +83,25 @@ impl Node {
 
             // If the node has children, lets fine an unprocessed one
             current_children = (*current).borrow().children.clone();
-            if let Some(unprocessed_child) = current_children.iter()
-                .find(|&child| {
-                    !(*(*child.clone()).borrow().file_info).borrow().processed
-                }) {
+            if let Some(unprocessed_child) = current_children
+                .iter()
+                .find(|&child| !(*(*child.clone()).borrow().file_info).borrow().processed)
+            {
                 // If we find one, we check if it's not a recursive one
-                let (is_unprocessed_child_recursive, file_name) = (*unprocessed_child.clone())
-                    .borrow().is_recursive();
+                let (is_unprocessed_child_recursive, file_name) =
+                    (*unprocessed_child.clone()).borrow().is_recursive();
                 if is_unprocessed_child_recursive {
                     // If it is recursive, it can be considered processed right away and we print
                     // out its path
                     (*(*unprocessed_child.clone()).borrow_mut().file_info)
-                        .borrow_mut().processed = true;
+                        .borrow_mut()
+                        .processed = true;
 
-                    let readable_path = (*unprocessed_child.clone()).borrow()
-                        .readable_path();
+                    let readable_path = (*unprocessed_child.clone()).borrow().readable_path();
 
                     let key = file_name.unwrap();
 
-                    if let Some(path) =
-                    recursive_paths.get_mut(key.as_str()) {
+                    if let Some(path) = recursive_paths.get_mut(key.as_str()) {
                         path.insert(readable_path.clone());
                     } else {
                         let mut set = HashSet::new();
@@ -115,10 +110,7 @@ impl Node {
                         recursive_paths.insert(key, set);
                     }
 
-                    eprintln!(
-                        "RECURSIVE PATH FOUND: {:?}",
-                        readable_path
-                    );
+                    eprintln!("RECURSIVE PATH FOUND: {:?}", readable_path);
                 } else {
                     // If it isn't, we can go deeper into the tree
                     current = unprocessed_child.clone();
@@ -135,43 +127,51 @@ impl Node {
     fn create_node_children(node: Rc<RefCell<Node>>, project: &mut Project) {
         let file_info = node.borrow().file_info.clone();
 
-        let node_children = (*file_info).borrow().includes.iter()
+        let node_children = (*file_info)
+            .borrow()
+            .includes
+            .iter()
             .filter_map(|include| {
-                if let Some(include_file_info) = project.get_file(
-                    include.clone(),
-                    (*file_info).borrow().module.clone(),
-                ) {
+                if let Some(include_file_info) =
+                    project.get_file(&include.clone(), &(*file_info).borrow().module.clone())
+                {
                     Some(Node::create(&include_file_info, Some(node.clone())))
                 } else {
                     None
                 }
-            }).collect();
+            })
+            .collect();
 
         node.borrow_mut().children = node_children;
     }
 
     fn is_recursive(&self) -> (bool, Option<String>) {
-        let mut abs_paths = self.node_path.iter()
+        let mut abs_paths = self
+            .node_path
+            .iter()
             .map(|file_info| (*file_info).borrow().abs_path.clone());
 
         if !abs_paths.all_unique() {
-            (true, Some((*self.node_path.last().unwrap()).borrow().file_name.clone()))
+            (
+                true,
+                Some((*self.node_path.last().unwrap()).borrow().file_name.clone()),
+            )
         } else {
             (false, None)
         }
     }
 
     fn readable_path(&self) -> Vec<String> {
-        self.node_path.iter().map(|node| {
-            (*node).borrow().file_name.clone()
-        }).collect()
+        self.node_path
+            .iter()
+            .map(|node| (*node).borrow().file_name.clone())
+            .collect()
     }
 }
 
 impl PartialEq for Node {
     fn eq(&self, other: &Self) -> bool {
-        self.file_info == other.file_info
-            && self.prev == other.prev
+        self.file_info == other.file_info && self.prev == other.prev
     }
 }
 
@@ -179,14 +179,25 @@ impl Debug for Node {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Node (")?;
         writeln!(f, "\tFile Info: {}", (*self.file_info).borrow().abs_path)?;
-        writeln!(f, "\tPrevious Node: {}", match self.prev.clone() {
-            Some(previous_node) => (*(*previous_node).borrow().file_info)
-                .borrow().file_name.clone(),
-            None => "None".to_owned()
-        })?;
-        writeln!(f, "\tChildren: {:?}", self.children.iter().map(|child| {
-            (*(**child).borrow().file_info).borrow().file_name.clone()
-        }).collect::<Vec<String>>())?;
+        writeln!(
+            f,
+            "\tPrevious Node: {}",
+            match self.prev.clone() {
+                Some(previous_node) => (*(*previous_node).borrow().file_info)
+                    .borrow()
+                    .file_name
+                    .clone(),
+                None => "None".to_owned(),
+            }
+        )?;
+        writeln!(
+            f,
+            "\tChildren: {:?}",
+            self.children
+                .iter()
+                .map(|child| { (*(**child).borrow().file_info).borrow().file_name.clone() })
+                .collect::<Vec<String>>()
+        )?;
         writeln!(f, "\tNode Path: {:?}", self.node_path)?;
         writeln!(f, ")")
     }

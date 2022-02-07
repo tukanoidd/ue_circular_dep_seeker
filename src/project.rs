@@ -1,23 +1,13 @@
-use std::{
-    rc::Rc,
-    ops::Add,
-    fs::File,
-    path::Path,
-    iter::FromIterator,
-    io::{
-        BufRead,
-        BufReader,
-    },
-    fmt::{
-        Debug,
-        Formatter,
-    },
-    collections::{
-        HashMap,
-        HashSet,
-    },
-};
 use std::cell::RefCell;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::{Debug, Formatter},
+    fs::File,
+    io::{BufRead, BufReader},
+    iter::FromIterator,
+    path::Path,
+    rc::Rc,
+};
 
 use substring::Substring;
 
@@ -31,10 +21,11 @@ pub struct Project {
 }
 
 impl Project {
-    pub fn create(project_path: String) -> Self {
-        let cmake_lists_file = File::open(
-            Path::new((project_path.clone() + "/CMakeLists.txt").as_str())
-        ).expect("Failed to open CMakeLists.txt");
+    pub fn create(project_path: &str) -> Self {
+        let cmake_lists_file = File::open(Path::new(
+            (project_path.to_string() + "/CMakeLists.txt").as_str(),
+        ))
+        .expect("Failed to open CMakeLists.txt");
 
         let mut modules: HashMap<String, HashSet<String>> = HashMap::new();
 
@@ -45,21 +36,16 @@ impl Project {
                 let stripped_cll = cll.replace(" ", "");
 
                 if stripped_cll.contains("include(") {
-                    let include = stripped_cll
-                        .replace("include(\"", "")
-                        .replace("\")", "");
+                    let include = stripped_cll.replace("include(\"", "").replace("\")", "");
 
                     if !include.contains("includes") {
                         continue;
                     }
 
-                    let include_cmake_file = File::open(
-                        Path::new(include.clone().as_str())
-                    )
+                    let include_cmake_file = File::open(Path::new(include.clone().as_str()))
                         .expect(format!("Couldn't open include file: {}", include).as_str());
 
-                    let include_cmake_file_lines =
-                        BufReader::new(include_cmake_file).lines();
+                    let include_cmake_file_lines = BufReader::new(include_cmake_file).lines();
 
                     for include_cmake_file_line in include_cmake_file_lines {
                         if let Ok(icfl) = include_cmake_file_line {
@@ -80,10 +66,8 @@ impl Project {
                                     .expect("Couldn't find 'Engine/' in the path");
 
                                 let module = inc_folder
-                                    .substring(
-                                        start_ind,
-                                        inc_folder.len(),
-                                    ).replace("/Public", "")
+                                    .substring(start_ind, inc_folder.len())
+                                    .replace("/Public", "")
                                     .replace("/Private", "");
 
                                 if modules.contains_key(module.clone().as_str()) {
@@ -92,10 +76,8 @@ impl Project {
                                         .unwrap()
                                         .insert(inc_folder);
                                 } else {
-                                    modules.insert(
-                                        module.clone(),
-                                        HashSet::from_iter([inc_folder]),
-                                    );
+                                    modules
+                                        .insert(module.clone(), HashSet::from_iter([inc_folder]));
                                 }
                             }
                         }
@@ -104,27 +86,29 @@ impl Project {
             }
         }
 
-        let mut res_modules: Vec<(String, Vec<String>)> = modules.iter()
-            .map(|(module, include_paths)| (
-                module.clone(),
-                include_paths
-                    .iter()
-                    .map(|inc_path| inc_path.clone())
-                    .collect::<Vec<String>>()
-            )).collect();
-        res_modules.sort_by(|(mod1, _inc1), (mod2, _inc2)| {
-            Ord::cmp(&mod1.len(), &mod2.len())
-        });
+        let mut res_modules: Vec<(String, Vec<String>)> = modules
+            .iter()
+            .map(|(module, include_paths)| {
+                (
+                    module.clone(),
+                    include_paths
+                        .iter()
+                        .map(|inc_path| inc_path.clone())
+                        .collect::<Vec<String>>(),
+                )
+            })
+            .collect();
+        res_modules.sort_by(|(mod1, _inc1), (mod2, _inc2)| Ord::cmp(&mod1.len(), &mod2.len()));
 
         Self {
-            root_path: project_path.clone(),
+            root_path: project_path.to_string(),
             modules: res_modules,
             files: vec![],
             circular_dependency_paths: HashSet::new(),
         }
     }
 
-    pub fn create_file_info(&mut self, abs_path: String) -> Rc<RefCell<FileInfo>> {
+    pub fn create_file_info(&mut self, abs_path: &str) -> Rc<RefCell<FileInfo>> {
         let file_info = FileInfo::create(abs_path, &self.modules);
 
         self.files.push(file_info.clone());
@@ -132,13 +116,16 @@ impl Project {
         file_info
     }
 
-    pub fn get_file(&mut self, partial_path: String, entry_module: String)
-                    -> Option<Rc<RefCell<FileInfo>>> {
+    pub fn get_file(
+        &mut self,
+        partial_path: &str,
+        entry_module: &str,
+    ) -> Option<Rc<RefCell<FileInfo>>> {
         // Check if root module actually exists
         let mut root_module = None;
 
         for modl in self.modules.clone() {
-            if modl.0 == entry_module.clone() {
+            if modl.0 == entry_module {
                 root_module = Some(modl);
                 break;
             }
@@ -148,31 +135,23 @@ impl Project {
         if root_module.is_some() {
             let modl = root_module.clone().unwrap();
 
-            if let Some(file) = self.get_file_in_module(
-                modl.clone(),
-                partial_path.clone(),
-            ) {
+            if let Some(file) = self.get_file_in_module(modl.clone(), partial_path) {
                 return Some(file);
             }
         }
 
-        let other_modules: Vec<(String, Vec<String>)> =
-            if let Some(root_mod) = root_module {
-                self.modules.iter()
-                    .filter(|(modl, _include_paths)|
-                        modl.clone() != root_mod.0.clone()
-                    )
-                    .map(|modl| modl.clone())
-                    .collect()
-            } else {
-                self.modules.clone()
-            };
+        let other_modules: Vec<(String, Vec<String>)> = if let Some(root_mod) = root_module {
+            self.modules
+                .iter()
+                .filter(|(modl, _include_paths)| modl != &root_mod.0)
+                .cloned()
+                .collect()
+        } else {
+            self.modules.clone()
+        };
 
         for module in other_modules {
-            if let Some(file) = self.get_file_in_module(
-                module,
-                partial_path.clone(),
-            ) {
+            if let Some(file) = self.get_file_in_module(module, partial_path) {
                 return Some(file);
             }
         }
@@ -183,25 +162,26 @@ impl Project {
     fn get_file_in_module(
         &mut self,
         modl: (String, Vec<String>),
-        partial_path: String,
+        partial_path: &str,
     ) -> Option<Rc<RefCell<FileInfo>>> {
         // Check if any of the paths inside of the module are viable for the file we're looking
         // for
         for include_path in modl.1.iter() {
             // Concatenating the include path and partial path
-            let path_to_file = include_path.clone()
-                .add("/")
-                .add(partial_path.as_str());
+            let path_to_file = format!("{}/{}", include_path, partial_path);
 
             // If path exists on the computer
-            if Path::new(path_to_file.clone().as_str()).exists() {
+            if Path::new(path_to_file.as_str()).exists() {
                 // Return cached file info if it exists
-                return if let Some(file) = self.files.iter()
-                    .find(|f| (*f).borrow().abs_path == path_to_file) {
+                return if let Some(file) = self
+                    .files
+                    .iter()
+                    .find(|f| (*f).borrow().abs_path == path_to_file)
+                {
                     Some(file.clone())
                 } else {
                     // If it doesnt, create new file info, cache it and return it
-                    Some(self.create_file_info(path_to_file))
+                    Some(self.create_file_info(&path_to_file))
                 };
             }
         }
