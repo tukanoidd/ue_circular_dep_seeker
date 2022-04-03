@@ -1,16 +1,20 @@
 [package]
-name = "ue_circular_dep_seeker"
+name = "ue_rec_deps_seeker"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tstd = { git = "https://github.com/tukanoidd/tstd" }
+gtk = { version = "0.4.1", package = "gtk4" }
+relm4 = "0.4.4"
+relm4-macros = "0.4.4"
+relm4-components = "0.4.4"
 
-substring = "1.4.5"
-itertools = "0.10.1"
+tracker = "0.1.1"
+native-dialog = "0.6.3"
 
-enum-map = "2.0.0"
+anyhow = "1.0.56"
+itertools = "0.10.3"
 
-paste = "1.0.6"
+open = "2.1.1"
