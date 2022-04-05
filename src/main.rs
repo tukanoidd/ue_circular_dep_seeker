@@ -1,12 +1,19 @@
-use std::{fs::File, io::Write, path::Path, rc::Rc};
+#[macro_use]
+extern crate log;
+
+use std::{
+    fs::File,
+    io::{BufRead, BufReader},
+    path::Path,
+};
 
 use gtk::{glib::Sender, prelude::*};
+use native_dialog::{FileDialog, MessageDialog, MessageType};
 use relm4::{send, AppUpdate, Model, RelmApp, WidgetPlus, Widgets};
 
-use itertools::Itertools;
-use native_dialog::{FileDialog, MessageDialog, MessageType};
+use anyhow::*;
 
-use ue_rec_deps_seeker::{node::Node, project::Project};
+use ue_rec_deps_seeker::{find_rec_deps, CACHE_CONFIG_PATH};
 
 #[derive(Copy, Clone)]
 enum ArgPath {
@@ -40,7 +47,6 @@ enum AppMsg {
 }
 
 #[tracker::track]
-#[derive(Default)]
 struct AppModel {
     project_path: Option<String>,
     entry_point: Option<String>,
@@ -49,6 +55,46 @@ struct AppModel {
 }
 
 impl AppModel {
+    fn new() -> Result<Self> {
+        let config_path = Path::new(CACHE_CONFIG_PATH);
+        let (project_path, entry_point, output_file) =
+            if config_path.exists() && config_path.is_file() {
+                let file = File::open(config_path)?;
+                let lines = BufReader::new(file).lines();
+
+                let mut peo = [None, None, None];
+                for (index, line) in lines.enumerate() {
+                    if index > 2 {
+                        break;
+                    }
+
+                    if let std::result::Result::Ok(line) = line {
+                        let var_name = match index {
+                            0 => "project_path",
+                            1 => "entry_point",
+                            2 => "output_file",
+                            _ => "",
+                        };
+                        info!("{}: {}", var_name, line);
+
+                        peo[index] = Some(line)
+                    }
+                }
+
+                (peo[0].clone(), peo[1].clone(), peo[2].clone())
+            } else {
+                (None, None, None)
+            };
+
+        Ok(Self {
+            project_path,
+            entry_point,
+            output_file,
+            was_successful: None,
+            tracker: 0,
+        })
+    }
+
     fn all_paths(&self) -> (bool, Option<String>) {
         if self.project_path.is_some() && self.entry_point.is_some() && self.output_file.is_some() {
             (true, None)
@@ -119,13 +165,13 @@ impl AppUpdate for AppModel {
                         .show_open_single_dir();
 
                     match path {
-                        Ok(path) => {
+                        std::result::Result::Ok(path) => {
                             if let Some(path) = path {
                                 self.set_project_path(path.to_str().map(|p| p.to_string()));
                             }
                         }
                         Err(error) => {
-                            println!("Couldn't get project path: {}", error)
+                            error!("Couldn't get project path: {}", error)
                         }
                     }
                 }
@@ -140,13 +186,13 @@ impl AppUpdate for AppModel {
                         .show_open_single_file();
 
                     match path {
-                        Ok(path) => {
+                        std::result::Result::Ok(path) => {
                             if let Some(path) = path {
                                 self.set_entry_point(path.to_str().map(|p| p.to_string()));
                             }
                         }
                         Err(error) => {
-                            println!("Couldn't get entry point path: {}", error)
+                            error!("Couldn't get entry point path: {}", error)
                         }
                     }
                 }
@@ -161,13 +207,13 @@ impl AppUpdate for AppModel {
                         .show_save_single_file();
 
                     match path {
-                        Ok(path) => {
+                        std::result::Result::Ok(path) => {
                             if let Some(path) = path {
                                 self.set_output_file(path.to_str().map(|p| p.to_string()));
                             }
                         }
                         Err(error) => {
-                            println!("Couldn't get output file path: {}", error)
+                            error!("Couldn't get output file path: {}", error)
                         }
                     }
                 }
@@ -177,63 +223,48 @@ impl AppUpdate for AppModel {
                 ArgPath::EntryPoint => self.set_entry_point(Some(path_str)),
                 ArgPath::OutputFile => self.set_output_file(Some(path_str)),
             },
-            AppMsg::StartAlgo => match self.all_paths() {
-                (false, Some(message)) => {
-                    println!("{}", message);
-                    return false;
-                }
-                (true, None) => {
-                    let (project_path, entry_point, output_file_path) = self.unwrap_all();
+            AppMsg::StartAlgo => {
+                return match self.all_paths() {
+                    (false, Some(message)) => {
+                        error!("{}", message);
+                        false
+                    }
+                    (true, None) => {
+                        let (project_path, entry_point, output_file_path) = self.unwrap_all();
 
-                    let mut project = Project::create(&project_path);
-                    let entry_point_file_info = Rc::new(project.create_file_info(&entry_point));
+                        let success =
+                            match find_rec_deps(&project_path, &entry_point, &output_file_path) {
+                                std::result::Result::Ok(_) => true,
+                                Err(err) => {
+                                    error!("{}", err);
+                                    false
+                                }
+                            };
 
-                    let root_node = Node::create(&entry_point_file_info, None);
+                        self.set_was_successful(Some(success));
 
-                    let recursive_paths = Node::traverse(&root_node, &mut project);
+                        if success {
+                            let open_file = MessageDialog::new()
+                                .set_type(MessageType::Info)
+                                .set_title("Success!")
+                                .set_text("Do you want to open the file?")
+                                .show_confirm()
+                                .unwrap();
 
-                    let mut file = File::create(Path::new(&output_file_path))
-                        .expect("Couldn't create the output file!");
-
-                    for (file_name, paths) in recursive_paths.iter() {
-                        file.write_all(b"------------------------------------------------\n")
-                            .expect("Couldn't write to the output file");
-
-                        file.write_all((format!("{}:\n", file_name)).as_bytes())
-                            .expect("Couldn't write to the output file");
-
-                        let output_paths: Vec<&Vec<String>> = paths
-                            .iter()
-                            .sorted_by(|path1, path2| Ord::cmp(&path1.len(), &path2.len()))
-                            .collect();
-
-                        for path in output_paths {
-                            file.write_all(format!("\t{}\n", path.join("->")).as_bytes())
-                                .expect("Couldn't write to the output file");
+                            if open_file && open::that(&output_file_path).is_err() {
+                                error!("Couldn't open the file with the default text editor!");
+                                return false;
+                            }
                         }
 
-                        file.write_all(
-                            "------------------------------------------------\n".as_bytes(),
-                        )
-                        .expect("Couldn't write to the output file");
+                        success
                     }
-
-                    self.set_was_successful(Some(true));
-
-                    let open_file = MessageDialog::new()
-                        .set_type(MessageType::Info)
-                        .set_title("Success!")
-                        .set_text("Do you want to open the file?")
-                        .show_confirm()
-                        .unwrap();
-
-                    if open_file {
-                        open::that(&output_file_path)
-                            .expect("Couldn't open the file with the default text editor!");
+                    _ => {
+                        error!("Something went horribly wrong with getting info about paths");
+                        false
                     }
                 }
-                _ => panic!("Something went horribly wrong with getting info about paths"),
-            },
+            }
         }
 
         true
@@ -249,11 +280,11 @@ struct AppWidgets {
 impl Widgets<AppModel, ()> for AppWidgets {
     type Root = gtk::ApplicationWindow;
 
-    fn init_view(_model: &AppModel, _components: &(), sender: Sender<AppMsg>) -> Self {
+    fn init_view(model: &AppModel, _components: &(), sender: Sender<AppMsg>) -> Self {
         let window = gtk::ApplicationWindow::builder()
             .default_height(500)
             .default_width(500)
-            .title("UE Recursive Dependecnies Seeker")
+            .title("UE Recursive Dependencies Seeker")
             .build();
         let main_container = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -263,6 +294,8 @@ impl Widgets<AppModel, ()> for AppWidgets {
 
         window.set_child(Some(&main_container));
 
+        let mut i = 0;
+        let paths = model.paths_arr();
         let entries =
             [ArgPath::Project, ArgPath::EntryPoint, ArgPath::OutputFile].map(|entry_type| {
                 let btn_sender = sender.clone();
@@ -281,6 +314,11 @@ impl Widgets<AppModel, ()> for AppWidgets {
                     .placeholder_text(entry_type.example())
                     .build();
 
+                let path = paths[i];
+                if let Some(path) = path {
+                    entry.set_text(path);
+                }
+
                 let button = gtk::Button::builder().label("...").build();
 
                 hbox.append(&label);
@@ -296,6 +334,8 @@ impl Widgets<AppModel, ()> for AppWidgets {
                 button.connect_clicked(move |_| send!(btn_sender, AppMsg::Choose(entry_type)));
 
                 main_container.append(&hbox);
+
+                i += 1;
 
                 entry
             });
@@ -330,7 +370,6 @@ impl Widgets<AppModel, ()> for AppWidgets {
         for (i, val) in vals.iter().enumerate() {
             if let Some(val) = val {
                 if entries_changed[i] {
-                    println!("{}", val);
                     self.entries[i].set_text(val);
                 }
             }
@@ -348,9 +387,14 @@ impl Widgets<AppModel, ()> for AppWidgets {
     }
 }
 
-fn main() {
-    let model = AppModel::default();
+fn main() -> Result<()> {
+    std::env::set_var("RUST_LOG", "trace");
+    pretty_env_logger::init_timed();
+
+    let model = AppModel::new()?;
 
     let app = RelmApp::new(model);
     app.run();
+
+    Ok(())
 }

@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate log;
+
 pub mod file_info {
     use std::{
         cell::RefCell,
@@ -7,6 +10,8 @@ pub mod file_info {
         path::Path,
         rc::Rc,
     };
+
+    use anyhow::*;
 
     #[derive(Eq, PartialEq, Hash)]
     pub enum FileType {
@@ -36,9 +41,11 @@ pub mod file_info {
     }
 
     impl FileInfo {
-        pub fn create(abs_path: &str, modules: &[(String, Vec<String>)]) -> Rc<RefCell<FileInfo>> {
-            let file = File::open(Path::new(abs_path))
-                .unwrap_or_else(|_| panic!("Couldn't open a file at: {}", abs_path));
+        pub fn create(
+            abs_path: &str,
+            modules: &[(String, Vec<String>)],
+        ) -> Result<Rc<RefCell<FileInfo>>> {
+            let file = File::open(Path::new(abs_path))?;
 
             let file_name = abs_path.split('/').last().unwrap();
             let file_type_str = file_name.split('.').last().unwrap();
@@ -47,7 +54,7 @@ pub mod file_info {
                 "h" | "hpp" => FileType::Header,
                 "c" | "cpp" => FileType::Source,
                 "inl" => FileType::Inline,
-                _ => panic!(
+                _ => bail!(
                     "{}",
                     format!("File type is not supported: '{}'", file_type_str)
                 ),
@@ -73,19 +80,21 @@ pub mod file_info {
 
             let module = modules
                 .iter()
-                .rfind(|(modl, _include_paths)| abs_path.contains(modl.as_str()))
-                .unwrap_or_else(|| panic!("Couldn't find the module of the file: {}", abs_path))
-                .0
-                .clone();
+                .rfind(|(modl, _include_paths)| abs_path.contains(modl.as_str()));
 
-            Rc::new(RefCell::new(Self {
+            let module = match module {
+                Some(module) => module.0.clone(),
+                None => bail!("Couldn't find the module of the file: {}", abs_path),
+            };
+
+            Ok(Rc::new(RefCell::new(Self {
                 abs_path: abs_path.to_string(),
                 file_name: file_name.to_owned(),
                 module,
                 file_type,
                 includes,
                 processed: false,
-            }))
+            })))
         }
     }
 
@@ -214,7 +223,7 @@ pub mod node {
                             recursive_paths.insert(key, set);
                         }
 
-                        eprintln!("RECURSIVE PATH FOUND: {:?}", readable_path);
+                        info!("RECURSIVE PATH FOUND: {:?}", readable_path);
                     } else {
                         // If it isn't, we can go deeper into the tree
                         current = unprocessed_child.clone();
@@ -236,11 +245,12 @@ pub mod node {
                 .includes
                 .iter()
                 .filter_map(|include| {
-                    project
-                        .get_file(&include.clone(), &(*file_info).borrow().module.clone())
-                        .map(|include_file_info| {
-                            Node::create(&include_file_info, Some(node.clone()))
-                        })
+                    match project.get_file(include, &(*file_info).borrow().module) {
+                        Ok(include_file_info) => {
+                            Some(Node::create(&include_file_info, Some(node.clone())))
+                        }
+                        Err(_) => None,
+                    }
                 })
                 .collect();
 
@@ -307,8 +317,8 @@ pub mod node {
 }
 
 pub mod project {
-    use std::cell::RefCell;
     use std::{
+        cell::RefCell,
         collections::{HashMap, HashSet},
         fmt::{Debug, Formatter},
         fs::File,
@@ -317,6 +327,8 @@ pub mod project {
         path::Path,
         rc::Rc,
     };
+
+    use anyhow::*;
 
     use crate::file_info::FileInfo;
 
@@ -328,11 +340,10 @@ pub mod project {
     }
 
     impl Project {
-        pub fn create(project_path: &str) -> Self {
+        pub fn create(project_path: &str) -> Result<Self> {
             let cmake_lists_file = File::open(Path::new(
                 (project_path.to_string() + "/CMakeLists.txt").as_str(),
-            ))
-            .expect("Failed to open CMakeLists.txt");
+            ))?;
 
             let mut modules: HashMap<String, HashSet<String>> = HashMap::new();
 
@@ -348,10 +359,7 @@ pub mod project {
                         continue;
                     }
 
-                    let include_cmake_file = File::open(Path::new(include.clone().as_str()))
-                        .unwrap_or_else(|err| {
-                            panic!("Couldn't open include file: {}. Error: {}", include, err)
-                        });
+                    let include_cmake_file = File::open(Path::new(include.clone().as_str()))?;
 
                     let include_cmake_file_lines = BufReader::new(include_cmake_file).lines();
 
@@ -368,9 +376,10 @@ pub mod project {
                                 continue;
                             }
 
-                            let start_ind = inc_folder
-                                .rfind("Engine/")
-                                .expect("Couldn't find 'Engine/' in the path");
+                            let start_ind = match inc_folder.rfind("Engine/") {
+                                Some(start_ind) => start_ind,
+                                None => bail!("Couldn't get start_ind"),
+                            };
 
                             let module = inc_folder[start_ind..]
                                 .replace("/Public", "")
@@ -400,27 +409,27 @@ pub mod project {
                 .collect();
             res_modules.sort_by(|(mod1, _inc1), (mod2, _inc2)| Ord::cmp(&mod1.len(), &mod2.len()));
 
-            Self {
+            Ok(Self {
                 root_path: project_path.to_string(),
                 modules: res_modules,
                 files: vec![],
                 circular_dependency_paths: HashSet::new(),
-            }
+            })
         }
 
-        pub fn create_file_info(&mut self, abs_path: &str) -> Rc<RefCell<FileInfo>> {
-            let file_info = FileInfo::create(abs_path, &self.modules);
+        pub fn create_file_info(&mut self, abs_path: &str) -> Result<Rc<RefCell<FileInfo>>> {
+            let file_info = FileInfo::create(abs_path, &self.modules)?;
 
             self.files.push(file_info.clone());
 
-            file_info
+            Ok(file_info)
         }
 
         pub fn get_file(
             &mut self,
             partial_path: &str,
             entry_module: &str,
-        ) -> Option<Rc<RefCell<FileInfo>>> {
+        ) -> Result<Rc<RefCell<FileInfo>>> {
             // Check if root module actually exists
             let mut root_module = None;
 
@@ -435,8 +444,8 @@ pub mod project {
             if root_module.is_some() {
                 let modl = root_module.clone().unwrap();
 
-                if let Some(file) = self.get_file_in_module(modl, partial_path) {
-                    return Some(file);
+                if let std::result::Result::Ok(file) = self.get_file_in_module(modl, partial_path) {
+                    return Ok(file);
                 }
             }
 
@@ -451,19 +460,20 @@ pub mod project {
             };
 
             for module in other_modules {
-                if let Some(file) = self.get_file_in_module(module, partial_path) {
-                    return Some(file);
+                if let std::result::Result::Ok(file) = self.get_file_in_module(module, partial_path)
+                {
+                    return Ok(file);
                 }
             }
 
-            None
+            bail!("Couldn't get the file");
         }
 
         fn get_file_in_module(
             &mut self,
             modl: (String, Vec<String>),
             partial_path: &str,
-        ) -> Option<Rc<RefCell<FileInfo>>> {
+        ) -> Result<Rc<RefCell<FileInfo>>> {
             // Check if any of the paths inside of the module are viable for the file we're looking
             // for
             for include_path in modl.1.iter() {
@@ -478,15 +488,15 @@ pub mod project {
                         .iter()
                         .find(|f| (*f).borrow().abs_path == path_to_file)
                     {
-                        Some(file.clone())
+                        Ok(file.clone())
                     } else {
                         // If it doesnt, create new file info, cache it and return it
-                        Some(self.create_file_info(&path_to_file))
+                        Ok(self.create_file_info(&path_to_file)?)
                     };
                 }
             }
 
-            None
+            bail!("Couldn't get the file in module")
         }
     }
 
@@ -510,4 +520,47 @@ pub mod project {
             writeln!(f, "]")
         }
     }
+}
+
+use std::{fs::File, io::Write, path::Path, rc::Rc};
+
+use anyhow::*;
+use itertools::Itertools;
+
+use crate::{node::Node, project::Project};
+
+pub const CACHE_CONFIG_PATH: &str = "./.cache";
+
+pub fn find_rec_deps(project_path: &str, entry_point: &str, output_file_path: &str) -> Result<()> {
+    let mut project = Project::create(project_path)?;
+    let entry_point_file_info = Rc::new(project.create_file_info(entry_point)?);
+
+    let root_node = Node::create(&entry_point_file_info, None);
+
+    let recursive_paths = Node::traverse(&root_node, &mut project);
+
+    let mut file = File::create(Path::new(&output_file_path))?;
+
+    for (file_name, paths) in recursive_paths.iter() {
+        file.write_all(b"------------------------------------------------\n")?;
+
+        file.write_all((format!("{}:\n", file_name)).as_bytes())?;
+
+        let output_paths: Vec<&Vec<String>> = paths
+            .iter()
+            .sorted_by(|path1, path2| Ord::cmp(&path1.len(), &path2.len()))
+            .collect();
+
+        for path in output_paths {
+            file.write_all(format!("\t{}\n", path.join("->")).as_bytes())?;
+        }
+
+        file.write_all("------------------------------------------------\n".as_bytes())?;
+    }
+
+    let mut config_file = File::create(CACHE_CONFIG_PATH)?;
+    config_file
+        .write_all(format!("{}\n{}\n{}", project_path, entry_point, output_file_path).as_bytes())?;
+
+    Ok(())
 }
